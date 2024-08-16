@@ -1,0 +1,6 @@
+userID,Loan Type,Name,Next Payment Amount,Next Payment Date,Pin,Principal Remaining
+jdoe,Auto,John Doe,475,9/1/24,1234,25000
+jsmith,Mortgage,Jane Smith,895,9/15/24,2345,200000
+mbrown,Mortgage,Michael Brown,1850,9/1/24,5678,300000
+swilliams,Student,Susan Williams,200,8/20/24,4567,10000
+bjohnson,Personal,Bob Johnson,150,10/5/24,3456,5000

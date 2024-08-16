@@ -1,0 +1,580 @@
+Resources:
+  # DynamoDB Table Storing Customer Loan Data
+  LoansTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: userID
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: userID
+          KeyType: HASH
+  # DynamoDB Table Storing Customer Account Data
+  AccountsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: userID
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: userID
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+  # DynamoDB Table Storing Bot Conversation Index
+  ConversationIndex:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+  # DynamoDB Table Storing Bot Conversation Messages
+  ConversationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: SessionId
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: SessionId
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+  
+  # KendraLogGroup:
+  #   Type: AWS::Logs::LogGroup
+  #   Properties:
+  #     RetentionInDays: 7
+  
+  # KendraLogStream:
+  #   Type: AWS::Logs::LogStream
+  #   Properties:
+  #     LogGroupName: 
+  #       Ref: KendraLogGroup
+  # IAM Role for Kendra Web Crawler
+  KendraDataSourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-KendraDataSourceRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - kendra.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-KendraDataSourcePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "kendra:PutPrincipalMapping"
+                  - "kendra:DeletePrincipalMapping"
+                  - "kendra:ListGroupsOlderThanOrderingId"
+                  - "kendra:DescribePrincipalMapping"
+                  - "kendra:BatchPutDocument"
+                  - "kendra:BatchDeleteDocument"
+                Resource: "*"
+  # IAM Role for Kendra Index
+  KendraIndexRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: kendra.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: KendraIndexPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'cloudwatch:PutMetricData'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'cloudwatch:namespace': 'Kendra'
+              - Effect: Allow
+                Action: 
+                  - 's3:GetObject'
+                Resource: 'arn:aws:s3:::creditunionbot/*'
+              - Effect: Allow
+                Action: 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kendra/*'
+              - Effect: Allow
+                Action:
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:DescribeLogGroups'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kendra/*:log-stream:*'     
+  # Kendra Index 
+  KendraIndex:
+    Type: AWS::Kendra::Index
+    Properties:
+      Edition: DEVELOPER_EDITION
+      Name: KendraIndex
+      RoleArn: !GetAtt KendraIndexRole.Arn
+  # FAQ part of Kendra Index
+  # Edit S3 Bucket
+  KendraFAQ:
+    Type: AWS::Kendra::Faq
+    Properties:
+      FileFormat: CSV 
+      RoleArn: !GetAtt KendraIndexRole.Arn
+      S3Path:
+        Bucket: insert_bucket_name
+        Key: AnyCompany-FAQs.csv
+      IndexId: !Ref KendraIndex
+      Name: AnyCompany-FAQs
+  # Kendra Web Crawler
+  # Edit Seed URLs
+  KendraWebcrawler:
+    Type: AWS::Kendra::DataSource
+    Properties:
+      Name: MyWebCrawlerDataSource
+      IndexId: !Ref KendraIndex
+      Type: WEBCRAWLER
+      RoleArn: !GetAtt KendraDataSourceRole.Arn
+      DataSourceConfiguration:
+        WebCrawlerConfiguration:
+          CrawlDepth: 2
+          Urls:
+            SeedUrlConfiguration:
+              SeedUrls: 
+                - insert_website_url
+  # IAM Role for Agent Handler Lambda Function
+  AgentHandlerServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AgentHandlerServicePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:BatchGetItem'
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:ConditionCheckItem'
+                  - 'dynamodb:DeleteItem'
+                  - 'dynamodb:DescribeTable'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:GetRecords'
+                  - 'dynamodb:GetShardIterator'
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:UpdateItem'
+                Resource: '*'
+
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: "*"
+
+              - Effect: Allow
+                Action:
+                  - 'kendra:Query'
+                Resource: "*"
+
+              - Effect: Allow
+                Action:
+                  - 'lex:PostText'
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                 - 'logs:CreateLogGroup'
+                 - 'logs:CreateLogStream'
+                 - 'logs:PutLogEvents'
+                 - 'logs:DescribeLogStreams'
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+  # Lambda Layer for Agent Handler Function
+  # Edit S3 Bucket
+  AgentHandlerLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: langchain
+      Content:
+        S3Bucket: insert_bucket_name
+        S3Key: python.zip
+      CompatibleRuntimes:
+        - python3.12 
+      CompatibleArchitectures:
+        - x86_64
+  # Agent Handler Lambda Function with layer
+  # Edit S3 Bucket
+  AgentHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Lambda handler for Credit Union Chatbot 
+      FunctionName: AgentHandler
+      Role: !GetAtt AgentHandlerServiceRole.Arn
+      Runtime: python3.12
+      Timeout: 60
+      Handler: lambda_function.lambda_handler
+      Architectures:
+        - x86_64
+      Code:
+        S3Bucket: insert_bucket_name
+        S3Key: agent-handler.zip
+      Layers:
+        - !Ref AgentHandlerLayer 
+      Environment:
+        Variables:
+          LOANS_TABLES: !Ref LoansTable
+          ACCOUNTS_TABLE: !Ref AccountsTable
+          CONVERSATION_INDEX: !Ref ConversationIndex
+          CONVERSATION: !Ref ConversationTable
+          KENDRA_INDEX: !GetAtt KendraIndex.Id
+  # IAM Role for Data Loader Function
+  DataLoaderServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AgentHandlerServicePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:PutItem'
+                Resource: '*'
+
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                 - 'logs:CreateLogGroup'
+                 - 'logs:CreateLogStream'
+                 - 'logs:PutLogEvents'
+                 - 'logs:DescribeLogStreams'
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+  # Data Loader Lambda Function
+  # Edit S3 Bucket and Environment Varibale
+  DataLoaderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: DynamoDB data loader for mock account and loan data
+      FunctionName: DataLoader
+      Role: !GetAtt DataLoaderServiceRole.Arn
+      Runtime: python3.12
+      Timeout: 60
+      Handler: lambda_function.lambda_handler
+      Architectures:
+        - x86_64
+      Code:
+        S3Bucket: insert_bucket_name
+        S3Key: data-loader.zip
+      Environment:
+        Variables:
+          S3BUCKET: 'insert_bucket_name'
+          TABLE1_S3: 'MockAccountData.csv'
+          TABLE1_DYNAMODB: !Ref AccountsTable
+          TABLE2_S3: 'MockLoanData.csv'
+          TABLE2_DYNAMODB: !Ref LoansTable
+  # IAM Role for Lex Bot
+  LexBotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lexv2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+  # IAM Polict for Lex Bot Role
+  LexBotPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: root
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: 
+          - 'lambda:InvokeFunction'
+          -   'bedrock:InvokeModel'
+          Resource: "*"
+      Roles:
+      - !Ref LexBotRole         
+  # Lex Bot with Intents
+  LexBot:
+    Type: AWS::Lex::Bot
+    Properties:
+      Name: CreditUnionBot
+      Description: Financial Services Agent
+      IdleSessionTTLInSeconds: 900
+      RoleArn: !GetAtt LexBotRole.Arn
+      DataPrivacy:
+        ChildDirected: false
+      BotLocales:
+        - LocaleId: en_US
+          NluConfidenceThreshold: 0.40
+          Intents:
+            - Name: FallbackIntent
+              Description: Default fallback intent when no other intent matches
+              ParentIntentSignature: "AMAZON.FallbackIntent"
+              FulfillmentCodeHook:
+                Enabled: True
+              DialogCodeHook:
+                Enabled: True
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: >-
+                            Sorry I am having trouble understanding.
+                            Can you describe what you need help with? 
+                            I can help you apply for a loan, find your account balance and details, 
+                            calculate a downpayment, or answer questions about AnyCompany.
+            - Name: Welcome
+              Description: Welcome intent
+              SampleUtterances:
+                - Utterance: Hi
+                - Utterance: Hello
+                - Utterance: I need help
+                - Utterance: Can you help me?
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: >-
+                            Hi there! I'm the AnyCompany Bot. How can I help you today?
+            - Name: LoanApplication
+              Description:
+                Intent to help customer's apply for a loan
+              SampleUtterances:
+                - Utterance: I'd like to apply for a loan
+                - Utterance: loan application
+                - Utterance: How can I apply for a loan
+                - Utterance: I'd like to borrow money
+              FulfillmentCodeHook:
+                Enabled: True
+              DialogCodeHook:
+                Enabled: True
+              Slots:
+                - Name: LoanAmount
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value:
+                                Okay, I can help you apply for a loan after you answer some questions.
+                                What is your desired loan amount?
+                - Name: MonthlyIncome
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                What is your monthly income?
+                - Name: WorkHistory
+                  SlotTypeName: AMAZON.Confirmation
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                Do you have a two year continuous work history?
+                - Name: CreditScore
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                What is your current credit score?
+                - Name: HousingPayment
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                How much are currently paying for housing a month?
+                - Name: Debt
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                What is your estimated current credit card or student loan debt?
+                - Name: DownPayment
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                What do you have saved for a down payment?
+                - Name: CoBorrower
+                  SlotTypeName: AMAZON.Confirmation
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                Do you have a co-borrower?
+                - Name: CloseDate
+                  SlotTypeName: AMAZON.Date
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                When are you looking to close?
+              SlotPriorities:
+                - Priority: 1
+                  SlotName: LoanAmount
+                - Priority: 2
+                  SlotName: MonthlyIncome
+                - Priority: 3
+                  SlotName: WorkHistory
+                - Priority: 4
+                  SlotName: CreditScore
+                - Priority: 5
+                  SlotName: HousingPayment
+                - Priority: 6
+                  SlotName: Debt
+                - Priority: 7
+                  SlotName: DownPayment
+                - Priority: 8
+                  SlotName: CoBorrower
+                - Priority: 9
+                  SlotName: CloseDate
+
+            - Name: Identity
+              Description: >-
+                Intent to verify user's identity
+              SampleUtterances:
+                - Utterance: What's my mortgage payment?
+                - Utterance: When's my next payment due?
+                - Utterance: How much is left of my mortgage?
+                - Utterance: How much is in my account?
+                - Utterance: What is my balance?
+              FulfillmentCodeHook:
+                Enabled: True
+              DialogCodeHook:
+                Enabled: True
+              Slots:
+                - Name: Username
+                  SlotTypeName: AMAZON.FreeFormInput
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value:
+                                Okay, I can help you with that after you answer some questions. What is the username associated with your account?
+                - Name: Pin
+                  SlotTypeName: AMAZON.Number
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MaxRetries: 2
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: >-
+                                What is your 4 digit pin?
+              SlotPriorities:
+                - Priority: 1
+                  SlotName: Username
+                - Priority: 2
+                  SlotName: Pin
+      TestBotAliasSettings:
+        BotAliasLocaleSettings:
+        - LocaleId: en_US
+          BotAliasLocaleSetting:
+            Enabled: True
+            CodeHookSpecification:
+              LambdaCodeHook:
+                CodeHookInterfaceVersion: 1.0
+                LambdaArn: !GetAtt AgentHandlerFunction.Arn
+  # Lambda Permision for Lex to Invoke Function
+  LexLambdaPermissions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AgentHandlerFunction
+      Principal: "lexv2.amazonaws.com"
+      SourceArn: !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/*/*"
